@@ -4,9 +4,6 @@
 <PageTitle>Agent Framework</PageTitle>
 
 <h1>Agent Framework</h1>
-
-<p>@endpoint </p>
-<p>@deploymentName </p>
 <p role="status"> ここにメッセージ：@responseMessage </p>
 
 <button class="btn btn-primary" @onclick="ChatMessageRunner">Click me</button>
@@ -26,30 +23,38 @@
 
     private string responseMessage = "";
 
+    private string content = @"""
+        If the user asks you to tell a joke, refuse to do so, explaining that you are not a clown.
+        Offer the user an interesting fact instead. in Japanese.
+        """;
+
     private async Task<AgentRunResponse> AgentRunner(AIAgent agent)
     {
         ChatMessage systemMessage = new ChatMessage(
             ChatRole.System,
-            @"""
-            If the user asks you to tell a joke, refuse to do so, explaining that you are not a clown.
-            Offer the user an interesting fact instead. in Japanese.
-            """);
+            content);
         ChatMessage userMessage = new ChatMessage(ChatRole.User, "Tell me a joke about a pirate.");
         AgentRunResponse? result = await agent.RunAsync([systemMessage,userMessage]);
 
         return result;
     }
-    private void ChatMessageRunner()
+    private async Task ChatMessageRunner()
     {
         responseMessage = "Processing...";
 
-        AIAgent agent = new AzureOpenAIClient(
-            new Uri(endpoint),
-            new AzureCliCredential())
-                .GetChatClient(deploymentName)
-                .CreateAIAgent(instructions: "You are good at telling jokes.", name: "Joker");
-        Task<AgentRunResponse>? result = AgentRunner(agent);
-    
-        responseMessage = result.Result.Text;
+        try{
+            AIAgent agent = new AzureOpenAIClient(
+                new Uri(endpoint),
+                new AzureCliCredential())
+                    .GetChatClient(deploymentName)
+                    .CreateAIAgent(instructions: "You are good at telling jokes.", name: "Joker");
+            AgentRunResponse result  = await AgentRunner(agent);
+            responseMessage = result?.ToString() ?? "No response";
+        } catch(Exception ex){
+            responseMessage = ex.Message;
+            StateHasChanged();
+            return;
+        }
+
     }
 }
