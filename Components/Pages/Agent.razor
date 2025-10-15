@@ -1,0 +1,60 @@
+﻿@page "/agent"
+@rendermode InteractiveServer
+
+<PageTitle>Agent Framework</PageTitle>
+
+<h1>Agent Framework</h1>
+<p role="status"> ここにメッセージ：@responseMessage </p>
+
+<button class="btn btn-primary" @onclick="ChatMessageRunner">Click me</button>
+
+@code {
+    @using Azure.AI.OpenAI;
+    @using Azure.Identity;
+    @using Microsoft.Agents.AI;
+    @using Microsoft.Extensions.AI;
+    @using OpenAI;
+
+    private string endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT")
+        ?? throw new InvalidOperationException("Environment variable 'AZURE_OPENAI_ENDPOINT' is not set.");
+
+    private string deploymentName = Environment.GetEnvironmentVariable("AZURE_OPENAI_DEPLOYMENT_NAME")
+        ?? throw new InvalidOperationException("Environment variable 'AZURE_OPENAI_DEPLOYMENT_NAME' is not set.");
+
+    private string responseMessage = "";
+
+    private string content = @"""
+        If the user asks you to tell a joke, refuse to do so, explaining that you are not a clown.
+        Offer the user an interesting fact instead. in Japanese.
+        """;
+
+    private async Task<AgentRunResponse> AgentRunner(AIAgent agent)
+    {
+        ChatMessage systemMessage = new ChatMessage(
+            ChatRole.System,
+            content);
+        ChatMessage userMessage = new ChatMessage(ChatRole.User, "Tell me a joke about a pirate.");
+        AgentRunResponse? result = await agent.RunAsync([systemMessage,userMessage]);
+
+        return result;
+    }
+    private async Task ChatMessageRunner()
+    {
+        responseMessage = "Processing...";
+
+        try{
+            AIAgent agent = new AzureOpenAIClient(
+                new Uri(endpoint),
+                new AzureCliCredential())
+                    .GetChatClient(deploymentName)
+                    .CreateAIAgent(instructions: "You are good at telling jokes.", name: "Joker");
+            AgentRunResponse result  = await AgentRunner(agent);
+            responseMessage = result?.ToString() ?? "No response";
+        } catch(Exception ex){
+            responseMessage = ex.Message;
+            StateHasChanged();
+            return;
+        }
+
+    }
+}
