@@ -1,0 +1,18 @@
+﻿@page "/agent"
+@rendermode InteractiveServer
+
+<PageTitle>Agent Framework</PageTitle>
+
+<h1>Agent Framework</h1>
+
+<p role="status">Current count: @currentCount</p>
+
+<button class="btn btn-primary" @onclick="IncrementCount">Click me</button>
+
+@code {
+    @using Azure.AI.OpenAI;
+    @using Azure.Identity;
+    @using Microsoft.Agents.AI;
+    @using Microsoft.Extensions.AI;
+    @using OpenAI;
+}
