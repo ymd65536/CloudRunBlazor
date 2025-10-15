@@ -5,9 +5,11 @@
 
 <h1>Agent Framework</h1>
 
-<p role="status">Current count: @currentCount</p>
+<p>@endpoint </p>
+<p>@deploymentName </p>
+<p role="status"> ここにメッセージ：@responseMessage </p>
 
-<button class="btn btn-primary" @onclick="IncrementCount">Click me</button>
+<button class="btn btn-primary" @onclick="ChatMessageRunner">Click me</button>
 
 @code {
     @using Azure.AI.OpenAI;
@@ -15,4 +17,39 @@
     @using Microsoft.Agents.AI;
     @using Microsoft.Extensions.AI;
     @using OpenAI;
+
+    private string endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT")
+        ?? throw new InvalidOperationException("Environment variable 'AZURE_OPENAI_ENDPOINT' is not set.");
+
+    private string deploymentName = Environment.GetEnvironmentVariable("AZURE_OPENAI_DEPLOYMENT_NAME")
+        ?? throw new InvalidOperationException("Environment variable 'AZURE_OPENAI_DEPLOYMENT_NAME' is not set.");
+
+    private string responseMessage = "";
+
+    private async Task<AgentRunResponse> AgentRunner(AIAgent agent)
+    {
+        ChatMessage systemMessage = new ChatMessage(
+            ChatRole.System,
+            @"""
+            If the user asks you to tell a joke, refuse to do so, explaining that you are not a clown.
+            Offer the user an interesting fact instead. in Japanese.
+            """);
+        ChatMessage userMessage = new ChatMessage(ChatRole.User, "Tell me a joke about a pirate.");
+        AgentRunResponse? result = await agent.RunAsync([systemMessage,userMessage]);
+
+        return result;
+    }
+    private void ChatMessageRunner()
+    {
+        responseMessage = "Processing...";
+
+        AIAgent agent = new AzureOpenAIClient(
+            new Uri(endpoint),
+            new AzureCliCredential())
+                .GetChatClient(deploymentName)
+                .CreateAIAgent(instructions: "You are good at telling jokes.", name: "Joker");
+        Task<AgentRunResponse>? result = AgentRunner(agent);
+    
+        responseMessage = result.Result.Text;
+    }
 }
