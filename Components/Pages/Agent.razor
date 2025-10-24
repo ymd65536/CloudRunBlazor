@@ -45,7 +45,7 @@
         try{
             AIAgent agent = new AzureOpenAIClient(
                 new Uri(endpoint),
-                new AzureCliCredential())
+                new DefaultAzureCredential())
                     .GetChatClient(deploymentName)
                     .CreateAIAgent(instructions: "You are good at telling jokes.", name: "Joker");
             AgentRunResponse result  = await AgentRunner(agent);
