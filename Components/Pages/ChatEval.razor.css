@@ -1,6 +1,7 @@
 .chat-container {
-    background-color: #79a8d1;
-    padding: 10px;
+    background-color: #f5f7fb;
+    /* 落ち着いた淡色で読みやすく */
+    padding: 14px;
     height: 70vh;
     overflow-y: auto;
     display: flex;
@@ -9,35 +10,42 @@
 
 .chat-message {
     display: flex;
-    margin-bottom: 10px;
-    max-width: 70%;
-}
-
-.message-content {
-    background-color: #ffffff;
-    border-radius: 10px;
-    padding: 10px;
-    position: relative;
-    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.1);
-}
-
-.chat-message.sent {
-    align-self: flex-end;
+    margin-bottom: 12px;
+    max-width: 80%;
 }
 
 .chat-message.sent .message-content {
-    background-color: #a0e87c;
+    background-color: #e6f7e6;
 }
 
 .chat-message.received {
     align-self: flex-start;
 }
 
-.chat-user {
-    font-weight: bold;
-    font-size: 0.8em;
-    margin-bottom: 5px;
-    color: #555;
+/* 役割ごとの配色とアクセント */
+.chat-message.received.assistant .message-content {
+    background-color: #ffffff;
+}
+
+.chat-message.received.evaluator .message-content {
+    background-color: #fff7e6;
+    border-left: 4px solid #f59e0b;
+    padding-left: 10px;
+}
+
+.chat-message.received.system .message-content {
+    background-color: #ffecec;
+    border-left: 4px solid #ef4444;
+    padding-left: 10px;
+}
+
+.message-content {
+    background-color: #ffffff;
+    border-radius: 12px;
+    padding: 10px 12px;
+    position: relative;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    border: 1px solid rgba(0, 0, 0, 0.04);
 }
 
 .chat-text {
@@ -59,6 +67,35 @@
     border-radius: 20px;
     padding: 10px 15px;
     margin-right: 10px;
+}
+
+/* 評価テキストは等幅で可読性を上げる */
+.chat-text.eval {
+    white-space: pre-wrap;
+    /* 改行とインデントを保持 */
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.95em;
+    line-height: 1.5;
+}
+
+.chat-user {
+    font-weight: bold;
+    font-size: 0.8em;
+    margin-bottom: 5px;
+    color: #555;
+}
+
+/* 役割によってユーザー名の色合いを少し変える */
+.chat-message.received.evaluator .chat-user {
+    color: #b45309;
+}
+
+.chat-message.received.system .chat-user {
+    color: #b91c1c;
+}
+
+.chat-message.sent .chat-user {
+    color: #2563eb;
 }
 
 .chat-input button {

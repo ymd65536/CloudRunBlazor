@@ -9,14 +9,18 @@
 <div id="chat-container" class="chat-container">
     @foreach (var message in messages)
     {
-        var messageClass = message.User == "You" ? "sent" : "received";
+        var messageClass = message.User == "You"
+            ? "sent"
+            : (message.User == "evaluator" ? "received evaluator"
+                : (message.User == "System" ? "received system" : "received assistant"));
+        var textClass = message.User == "evaluator" ? "chat-text eval" : "chat-text";
         <div class="chat-message @messageClass">
             <div class="message-content">
                 @if (message.User != "You")
                 {
                     <div class="chat-user">@message.User</div>
                 }
-                <div class="chat-text">@message.Text</div>
+                <div class="@textClass">@message.Text</div>
             </div>
         </div>
     }
@@ -269,11 +273,12 @@
         try
         {
             var translated = await TranslateToJapanese(summary);
-            return string.IsNullOrWhiteSpace(translated) ? summary : translated;
+            var finalText = string.IsNullOrWhiteSpace(translated) ? summary : translated;
+            return finalText.Trim();
         }
         catch
         {
-            return summary;
+            return summary.Trim();
         }
     }
 
