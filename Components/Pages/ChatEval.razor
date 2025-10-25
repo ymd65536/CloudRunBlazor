@@ -14,13 +14,21 @@
             : (message.User == "evaluator" ? "received evaluator"
                 : (message.User == "System" ? "received system" : "received assistant"));
         var textClass = message.User == "evaluator" ? "chat-text eval" : "chat-text";
+        var messageContent = message.User == "evaluator" ? ProcessColorTags(message.Text) : message.Text;
         <div class="chat-message @messageClass">
             <div class="message-content">
                 @if (message.User != "You")
                 {
                     <div class="chat-user">@message.User</div>
                 }
-                <div class="@textClass">@message.Text</div>
+                @if (message.User == "evaluator")
+                {
+                    <div class="@textClass">@((MarkupString)messageContent)</div>
+                }
+                else
+                {
+                    <div class="@textClass">@message.Text</div>
+                }
             </div>
         </div>
     }
@@ -245,22 +253,35 @@
             // EvaluationMetric のプロパティを確認
             if (metric.Value is EvaluationMetric evalMetric)
             {
-                summary += $"\n◆ 評価項目 {metricNumber}: {evalMetric.Name ?? metric.Key}\n";
+                // メトリック名に応じた絵文字とカラーコード
+                var metricEmoji = GetMetricEmoji(evalMetric.Name ?? metric.Key);
+                var metricColor = GetMetricColorTag(evalMetric.Name ?? metric.Key);
+                
+                summary += $"\n{metricColor}{metricEmoji} 評価項目 {metricNumber}: {evalMetric.Name ?? metric.Key}{{/color}}\n";
                 summary += new string('─', 40) + "\n";
                 
+                // スコア表示（数値の場合はプログレスバー風に）
                 if (evalMetric.Interpretation != null)
                 {
-                    summary += $"▸ 評価結果\n  {evalMetric.Interpretation}\n\n";
+                    var interpretationText = evalMetric.Interpretation.ToString() ?? string.Empty;
+                    var scoreBar = TryExtractScoreAndCreateBar(interpretationText, out var displayText);
+                    
+                    summary += $"▸ 📊 評価結果\n  {displayText}";
+                    if (!string.IsNullOrWhiteSpace(scoreBar))
+                    {
+                        summary += $"\n  {scoreBar}";
+                    }
+                    summary += "\n\n";
                 }
                 
                 if (!string.IsNullOrWhiteSpace(evalMetric.Reason))
                 {
-                    summary += $"▸ 理由\n  {evalMetric.Reason}\n\n";
+                    summary += $"▸ 💡 理由\n  {evalMetric.Reason}\n\n";
                 }
                 
                 if (evalMetric.Context != null && evalMetric.Context.Count > 0)
                 {
-                    summary += $"▸ コンテキスト\n";
+                    summary += $"▸ 📝 コンテキスト\n";
                     foreach (var ctx in evalMetric.Context)
                     {
                         summary += $"  • {ctx.Key}: {ctx.Value}\n";
@@ -271,7 +292,7 @@
                 // Diagnostics の詳細を確認
                 if (evalMetric.Diagnostics != null && evalMetric.Diagnostics.Count > 0)
                 {
-                    summary += $"▸ 診断情報 ({evalMetric.Diagnostics.Count}件)\n";
+                    summary += $"▸ 🔍 診断情報 ({evalMetric.Diagnostics.Count}件)\n";
                     foreach (var diagnostic in evalMetric.Diagnostics)
                     {
                         summary += $"  • {diagnostic.Message} [重要度: {diagnostic.Severity}]\n";
@@ -282,7 +303,7 @@
                 // Metadata の確認
                 if (evalMetric.Metadata != null && evalMetric.Metadata.Count > 0)
                 {
-                    summary += $"▸ 詳細情報 ({evalMetric.Metadata.Count}項目)\n";
+                    summary += $"▸ 🔖 詳細情報 ({evalMetric.Metadata.Count}項目)\n";
                     foreach (var meta in evalMetric.Metadata)
                     {
                         summary += $"  • {meta.Key}: {meta.Value}\n";
@@ -319,10 +340,18 @@
             var agent = client
                 .GetChatClient(deploymentName)
                 .CreateAIAgent(
-                    instructions: "You are a professional Japanese translator. Translate the user's content into natural Japanese. Preserve line breaks, indentation, and list markers. Output only the translation.",
+                    instructions: @"You are a professional Japanese translator specialized in technical evaluation reports.
+- Translate all content into natural, professional Japanese.
+- Keep ALL formatting: line breaks, indentation, bullets (•), section markers (▸, ◆), emoji, and decorative lines (━, ─).
+- Preserve technical terms appropriately (e.g., 'Coherence' → '一貫性', 'Fluency' → '流暢性', 'Relevance' → '関連性').
+- Keep color tags like {color:blue} intact.
+- Translate evaluation content while maintaining clarity and professionalism.
+- Output ONLY the translated text without any explanations.",
                     name: "Translator");
 
-            var system = new ChatMessage(ChatRole.System, "You translate any text into natural Japanese. Keep formatting.");
+            var system = new ChatMessage(ChatRole.System, @"You translate technical evaluation reports into natural Japanese. 
+Preserve all formatting elements: emoji, bullets, lines, indentation, color tags. 
+Translate technical terms appropriately while keeping the report structure intact.");
             var user = new ChatMessage(ChatRole.User, text);
             var result = await agent.RunAsync([system, user]);
             return result?.ToString() ?? text;
@@ -331,6 +360,137 @@
         {
             return text;
         }
+    }
+
+    private string GetMetricEmoji(string metricName)
+    {
+        if (string.IsNullOrEmpty(metricName)) return "📌";
+        
+        var name = metricName.ToLower();
+        return name switch
+        {
+            var n when n.Contains("coherence") || n.Contains("一貫") => "🔗",
+            var n when n.Contains("fluency") || n.Contains("流暢") => "✨",
+            var n when n.Contains("relevance") || n.Contains("関連") => "🎯",
+            var n when n.Contains("groundedness") || n.Contains("根拠") => "🏛️",
+            var n when n.Contains("similarity") || n.Contains("類似") => "🔄",
+            var n when n.Contains("correctness") || n.Contains("正確") => "✅",
+            _ => "📌"
+        };
+    }
+
+    private string GetMetricColorTag(string metricName)
+    {
+        if (string.IsNullOrEmpty(metricName)) return "{color:gray}";
+        
+        var name = metricName.ToLower();
+        var colorName = name switch
+        {
+            var n when n.Contains("coherence") || n.Contains("一貫") => "blue",
+            var n when n.Contains("fluency") || n.Contains("流暢") => "green",
+            var n when n.Contains("relevance") || n.Contains("関連") => "purple",
+            var n when n.Contains("groundedness") || n.Contains("根拠") => "orange",
+            var n when n.Contains("similarity") || n.Contains("類似") => "cyan",
+            var n when n.Contains("correctness") || n.Contains("正確") => "teal",
+            _ => "gray"
+        };
+        return $"{{color:{colorName}}}";
+    }
+
+    private string TryExtractScoreAndCreateBar(string interpretationText, out string displayText)
+    {
+        displayText = interpretationText;
+        
+        // スコアの抽出を試みる（例: "Score: 4", "4/5", "80%", "0.8" など）
+        var scorePatterns = new[]
+        {
+            @"(?:score|スコア)[:\s]*(\d+(?:\.\d+)?)\s*(?:/\s*(\d+))?",
+            @"(\d+)%",
+            @"^(\d+(?:\.\d+)?)\s*/\s*(\d+)$",
+            @"^0?\.(\d+)$"
+        };
+
+        foreach (var pattern in scorePatterns)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(interpretationText, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                double score;
+                double maxScore = 5.0;
+
+                if (match.Groups.Count > 2 && !string.IsNullOrEmpty(match.Groups[2].Value))
+                {
+                    // "4/5" 形式
+                    score = double.Parse(match.Groups[1].Value);
+                    maxScore = double.Parse(match.Groups[2].Value);
+                }
+                else if (pattern.Contains("%"))
+                {
+                    // "80%" 形式
+                    score = double.Parse(match.Groups[1].Value);
+                    maxScore = 100.0;
+                }
+                else if (pattern.Contains("0?\\."))
+                {
+                    // "0.8" 形式
+                    score = double.Parse("0." + match.Groups[1].Value);
+                    maxScore = 1.0;
+                }
+                else
+                {
+                    score = double.Parse(match.Groups[1].Value);
+                }
+
+                // 正規化（0-1の範囲に）
+                var normalized = score / maxScore;
+                return CreateProgressBar(normalized, score, maxScore);
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private string CreateProgressBar(double normalizedScore, double score, double maxScore)
+    {
+        const int barLength = 20;
+        var filledLength = (int)(normalizedScore * barLength);
+        var emptyLength = barLength - filledLength;
+
+        var bar = new string('█', filledLength) + new string('░', emptyLength);
+        var percentage = (normalizedScore * 100).ToString("F1");
+        
+        return $"[{bar}] {percentage}% ({score}/{maxScore})";
+    }
+
+    private string ProcessColorTags(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        
+        // HTMLエスケープ
+        text = System.Net.WebUtility.HtmlEncode(text);
+        
+        // カラータグを処理
+        var colorMap = new Dictionary<string, string>
+        {
+            { "blue", "#2563eb" },
+            { "green", "#16a34a" },
+            { "purple", "#9333ea" },
+            { "orange", "#ea580c" },
+            { "cyan", "#0891b2" },
+            { "teal", "#0d9488" },
+            { "gray", "#6b7280" }
+        };
+        
+        foreach (var (colorName, colorCode) in colorMap)
+        {
+            text = text.Replace($"{{color:{colorName}}}", $"<span style='color:{colorCode};font-weight:600;'>");
+        }
+        text = text.Replace("{/color}", "</span>");
+        
+        // 改行をHTMLの改行に変換
+        text = text.Replace("\n", "<br/>");
+        
+        return text;
     }
 
     [JSInvokable]
