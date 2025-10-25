@@ -234,40 +234,67 @@
             new ChatResponse(new ChatMessage(ChatRole.Assistant, aiResponse))
         );
         
+        // 評価サマリーのヘッダー
+        summary = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+        summary += "📊 品質評価レポート\n";
+        summary += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+        
+        int metricNumber = 1;
         foreach (var metric in evaluationResult.Metrics)
         {
-            summary += $"\n【メトリックキー】 {metric.Key}";
-
             // EvaluationMetric のプロパティを確認
             if (metric.Value is EvaluationMetric evalMetric)
             {
-                summary += $"\n  名称: {evalMetric.Name}";
-                summary += $"\n  理由: {evalMetric.Reason}";
-                summary += $"\n  解釈: {evalMetric.Interpretation}";
-                summary += $"\n  コンテキスト: {evalMetric.Context}";
+                summary += $"\n◆ 評価項目 {metricNumber}: {evalMetric.Name ?? metric.Key}\n";
+                summary += new string('─', 40) + "\n";
+                
+                if (evalMetric.Interpretation != null)
+                {
+                    summary += $"▸ 評価結果\n  {evalMetric.Interpretation}\n\n";
+                }
+                
+                if (!string.IsNullOrWhiteSpace(evalMetric.Reason))
+                {
+                    summary += $"▸ 理由\n  {evalMetric.Reason}\n\n";
+                }
+                
+                if (evalMetric.Context != null && evalMetric.Context.Count > 0)
+                {
+                    summary += $"▸ コンテキスト\n";
+                    foreach (var ctx in evalMetric.Context)
+                    {
+                        summary += $"  • {ctx.Key}: {ctx.Value}\n";
+                    }
+                    summary += "\n";
+                }
                 
                 // Diagnostics の詳細を確認
-                if (evalMetric.Diagnostics != null)
+                if (evalMetric.Diagnostics != null && evalMetric.Diagnostics.Count > 0)
                 {
-                    summary += $"\n  診断の数: {evalMetric.Diagnostics.Count}";
+                    summary += $"▸ 診断情報 ({evalMetric.Diagnostics.Count}件)\n";
                     foreach (var diagnostic in evalMetric.Diagnostics)
                     {
-                        summary += $"\n    - メッセージ: {diagnostic.Message}";
-                        summary += $"\n      重要度: {diagnostic.Severity}";
+                        summary += $"  • {diagnostic.Message} [重要度: {diagnostic.Severity}]\n";
                     }
+                    summary += "\n";
                 }
                 
                 // Metadata の確認
-                if (evalMetric.Metadata != null)
+                if (evalMetric.Metadata != null && evalMetric.Metadata.Count > 0)
                 {
-                    summary += $"\n  メタデータの数: {evalMetric.Metadata.Count}";
+                    summary += $"▸ 詳細情報 ({evalMetric.Metadata.Count}項目)\n";
                     foreach (var meta in evalMetric.Metadata)
                     {
-                        summary += $"\n    {meta.Key}: {meta.Value}";
+                        summary += $"  • {meta.Key}: {meta.Value}\n";
                     }
+                    summary += "\n";
                 }
+                
+                metricNumber++;
             }
         }
+        
+        summary += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
 
         // 翻訳して日本語で返す（ラベルは日本語化済みだが、本体が英語の場合に備える）
         try
