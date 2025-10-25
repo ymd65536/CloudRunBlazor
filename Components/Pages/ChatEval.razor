@@ -70,6 +70,9 @@
     @using Azure.Identity;
     @using Microsoft.Agents.AI;
     @using Microsoft.Extensions.AI;
+    @using Microsoft.Extensions.AI.Evaluation;
+    @using Microsoft.Extensions.Configuration;
+    @using Microsoft.Extensions.AI.Evaluation.Quality;
     @using OpenAI;
 
     private List<Message> messages = new List<Message>();
@@ -153,6 +156,13 @@
             ChatMessage userChatMessage = new ChatMessage(ChatRole.User, userMessage);
             
             AgentRunResponse? result = await agent.RunAsync([systemMessage, userChatMessage]);
+
+            IEvaluator[] evaluators = [
+                new CoherenceEvaluator(),
+                new FluencyEvaluator(),
+                new RelevanceEvaluator(),
+            ];
+
 
             return result?.ToString() ?? "応答がありません";
         }
