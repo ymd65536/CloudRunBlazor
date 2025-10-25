@@ -1,0 +1,524 @@
+@page "/chateval"
+@rendermode InteractiveServer
+@inject IJSRuntime JSRuntime
+@implements IDisposable
+@using Microsoft.AspNetCore.Components.Web
+
+<PageTitle>Chat Eval</PageTitle>
+
+<div id="chat-container" class="chat-container">
+    @foreach (var message in messages)
+    {
+        var messageClass = message.User == "You"
+            ? "sent"
+            : (message.User == "evaluator" ? "received evaluator"
+                : (message.User == "System" ? "received system" : "received assistant"));
+        var textClass = message.User == "evaluator" ? "chat-text eval" : "chat-text";
+        var messageContent = message.User == "evaluator" ? ProcessColorTags(message.Text) : message.Text;
+        <div class="chat-message @messageClass">
+            <div class="message-content">
+                @if (message.User != "You")
+                {
+                    <div class="chat-user">@message.User</div>
+                }
+                @if (message.User == "evaluator")
+                {
+                    <div class="@textClass">@((MarkupString)messageContent)</div>
+                }
+                else
+                {
+                    <div class="@textClass">@message.Text</div>
+                }
+            </div>
+        </div>
+    }
+    @if (isProcessing)
+    {
+        <div class="chat-message received">
+            <div class="message-content">
+                <div class="chat-user">@(!isEvaluating ? "Assistant" : "evaluator")</div>
+                <div class="chat-text">@(!isEvaluating ? "入力中..." : "評価中...")</div>
+            </div>
+        </div>
+    }
+</div>
+
+<div class="chat-input">
+    <input @ref="inputElement"
+           @bind="newMessage" 
+           @bind:event="oninput" 
+           id="chat-input-field"
+           placeholder="メッセージを入力..." 
+           disabled="@isProcessing" />
+    <button @onclick="SendMessage" disabled="@isProcessing">Send</button>
+</div>
+
+<script>
+    window.setupChatInput = function(dotNetHelper) {
+        const inputElement = document.getElementById('chat-input-field');
+        if (!inputElement) return;
+        
+        let isComposing = false;
+        
+        inputElement.addEventListener('compositionstart', function() {
+            isComposing = true;
+        });
+        
+        inputElement.addEventListener('compositionend', function() {
+            isComposing = false;
+        });
+        
+        inputElement.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !isComposing) {
+                e.preventDefault();
+                dotNetHelper.invokeMethodAsync('SendMessageFromJS');
+            }
+        });
+    };
+</script>
+
+@code {
+    @using Azure.AI.OpenAI;
+    @using Azure.Identity;
+    @using Microsoft.Agents.AI;
+    @using Microsoft.Extensions.AI;
+    @using Microsoft.Extensions.AI.Evaluation;
+    @using Microsoft.Extensions.Configuration;
+    @using Microsoft.Extensions.AI.Evaluation.Quality;
+    @using Microsoft.Extensions.AI.Evaluation.Reporting;
+    @using Microsoft.Extensions.AI.Evaluation.Reporting.Storage;
+    @using OpenAI;
+
+    private List<Message> messages = new List<Message>();
+    private string newMessage = string.Empty;
+    private bool isProcessing = false;
+    private bool isEvaluating = false;
+    private ElementReference inputElement;
+    private DotNetObjectReference<ChatEval>? dotNetHelper;
+    private const string EvaluationSystemPrompt = "You are a helpful assistant for evaluation. Always respond in Japanese.";
+
+    private string endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT")
+        ?? throw new InvalidOperationException("Environment variable 'AZURE_OPENAI_ENDPOINT' is not set.");
+
+    private string deploymentName = Environment.GetEnvironmentVariable("AZURE_OPENAI_DEPLOYMENT_NAME")
+        ?? throw new InvalidOperationException("Environment variable 'AZURE_OPENAI_DEPLOYMENT_NAME' is not set.");
+
+    private string summary = "";
+    protected override void OnInitialized()
+    {
+        messages.Add(new Message { User = "Assistant", Text = "評価用チャットへようこそ。テキストを入力して送信してください。" });
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            dotNetHelper = DotNetObjectReference.Create(this);
+            await JSRuntime.InvokeVoidAsync("setupChatInput", dotNetHelper);
+            await ScrollToBottom();
+        }
+    }
+
+    private async Task SendMessage()
+    {
+        if (!string.IsNullOrWhiteSpace(newMessage) && !isProcessing)
+        {
+            var messageToSend = newMessage;
+            newMessage = string.Empty; // Clear the input field immediately
+
+            // Add user message
+            messages.Add(new Message { User = "You", Text = messageToSend });
+
+            // Set processing state and update UI
+            isProcessing = true;
+            StateHasChanged();
+
+            // Give the DOM a moment to update before scrolling
+            await Task.Delay(50);
+            await ScrollToBottom();
+
+            // Get AI response
+            try
+            {
+                var aiResponse = await GetAIResponse(messageToSend);
+                messages.Add(new Message { User = "Assistant", Text = aiResponse });
+
+                // Assistant 応答を一旦表示してスクロール
+                StateHasChanged();
+                await Task.Delay(50);
+                await ScrollToBottom();
+
+                // Evaluate the assistant response and show the result in Japanese
+                try
+                {
+                    isEvaluating = true;
+                    StateHasChanged();
+                    var evalSummary = await EvaluateResponse(EvaluationSystemPrompt, messageToSend, aiResponse);
+                    messages.Add(new Message { User = "evaluator", Text = evalSummary });
+                }
+                catch (Exception evalEx)
+                {
+                    messages.Add(new Message { User = "System", Text = $"評価時にエラーが発生しました: {evalEx.Message}" });
+                }
+            }
+            catch (Exception ex)
+            {
+                messages.Add(new Message { User = "System", Text = $"エラーが発生しました: {ex.Message}" });
+            }
+            finally
+            {
+                isEvaluating = false;
+                isProcessing = false;
+                StateHasChanged(); // Important: Update UI to re-enable input
+                await Task.Delay(50);
+                await ScrollToBottom();
+            }
+        }
+    }
+
+    private async Task<string> GetAIResponse(string userMessage)
+    {
+        try
+        {
+            AIAgent agent = new AzureOpenAIClient(
+                new Uri(endpoint),
+                new DefaultAzureCredential())
+                    .GetChatClient(deploymentName)
+                    .CreateAIAgent(instructions: EvaluationSystemPrompt, name: "ChatEvalAssistant");
+
+            ChatMessage systemMessage = new ChatMessage(
+                ChatRole.System,
+                EvaluationSystemPrompt);
+            ChatMessage userChatMessage = new ChatMessage(ChatRole.User, userMessage);
+            AgentRunResponse? result = await agent.RunAsync([systemMessage, userChatMessage]);
+
+            return result?.ToString() ?? "応答がありません";
+        }
+        catch (Exception ex)
+        {
+            return $"エラー: {ex.Message}";
+        }
+    }
+
+    private async Task<string> EvaluateResponse(string chatSystemMessage, string userMessage, string aiResponse)
+    {
+        // 毎回新しい要約を作成
+        summary = string.Empty;
+
+        IEvaluator[] evaluators = [
+            new CoherenceEvaluator(),
+            new FluencyEvaluator(),
+            new RelevanceEvaluator(),
+        ];
+
+        AzureOpenAIClient chatClient =
+            new(
+                new Uri(endpoint),
+                new DefaultAzureCredential(new DefaultAzureCredentialOptions()));
+
+        IChatClient client = chatClient.GetChatClient(deploymentName: deploymentName).AsIChatClient();
+
+        var chatConfig = new ChatConfiguration(client);
+
+        // ディスクにキャッシュを保存する ReportingConfiguration を作成
+        var reportingConfiguration = DiskBasedReportingConfiguration.Create(
+            // キャッシュを保存するルートパス
+            storageRootPath: "./reports",
+            // 評価器の設定
+            evaluators,
+            chatConfig
+            );
+
+        // ReportingConfiguration を使って ScenarioRun を作成 (ScenarioRun を使って実際の評価を行う）
+        ScenarioRun scenario = await reportingConfiguration.CreateScenarioRunAsync("QualityEvaluators");
+        // インプットに対して、結果がちゃんとしているかを評価
+        EvaluationResult evaluationResult = await scenario.EvaluateAsync(
+            // チャットのインプット
+            [
+                new ChatMessage(ChatRole.System, chatSystemMessage),
+                new ChatMessage(ChatRole.User, userMessage),
+            ],
+            // 結果
+            new ChatResponse(new ChatMessage(ChatRole.Assistant, aiResponse))
+        );
+        
+        // 評価サマリーのヘッダー
+        summary = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+        summary += "📊 品質評価レポート\n";
+        summary += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n";
+        
+        int metricNumber = 1;
+        foreach (var metric in evaluationResult.Metrics)
+        {
+            // EvaluationMetric のプロパティを確認
+            if (metric.Value is EvaluationMetric evalMetric)
+            {
+                // メトリック名に応じた絵文字とカラーコード
+                var metricEmoji = GetMetricEmoji(evalMetric.Name ?? metric.Key);
+                var metricColor = GetMetricColorTag(evalMetric.Name ?? metric.Key);
+                
+                summary += $"\n{metricColor}{metricEmoji} 評価項目 {metricNumber}: {evalMetric.Name ?? metric.Key}{{/color}}\n";
+                summary += new string('─', 40) + "\n";
+                
+                // スコア表示（数値の場合はプログレスバー風に）
+                if (evalMetric.Interpretation != null)
+                {
+                    var interpretationText = evalMetric.Interpretation.ToString() ?? string.Empty;
+                    var scoreBar = TryExtractScoreAndCreateBar(interpretationText, out var displayText);
+                    
+                    summary += $"▸ 📊 評価結果\n  {displayText}";
+                    if (!string.IsNullOrWhiteSpace(scoreBar))
+                    {
+                        summary += $"\n  {scoreBar}";
+                    }
+                    summary += "\n\n";
+                }
+                
+                if (!string.IsNullOrWhiteSpace(evalMetric.Reason))
+                {
+                    summary += $"▸ 💡 理由\n  {evalMetric.Reason}\n\n";
+                }
+                
+                if (evalMetric.Context != null && evalMetric.Context.Count > 0)
+                {
+                    summary += $"▸ 📝 コンテキスト\n";
+                    foreach (var ctx in evalMetric.Context)
+                    {
+                        summary += $"  • {ctx.Key}: {ctx.Value}\n";
+                    }
+                    summary += "\n";
+                }
+                
+                // Diagnostics の詳細を確認
+                if (evalMetric.Diagnostics != null && evalMetric.Diagnostics.Count > 0)
+                {
+                    summary += $"▸ 🔍 診断情報 ({evalMetric.Diagnostics.Count}件)\n";
+                    foreach (var diagnostic in evalMetric.Diagnostics)
+                    {
+                        summary += $"  • {diagnostic.Message} [重要度: {diagnostic.Severity}]\n";
+                    }
+                    summary += "\n";
+                }
+                
+                // Metadata の確認
+                if (evalMetric.Metadata != null && evalMetric.Metadata.Count > 0)
+                {
+                    summary += $"▸ 🔖 詳細情報 ({evalMetric.Metadata.Count}項目)\n";
+                    foreach (var meta in evalMetric.Metadata)
+                    {
+                        summary += $"  • {meta.Key}: {meta.Value}\n";
+                    }
+                    summary += "\n";
+                }
+                
+                metricNumber++;
+            }
+        }
+        
+        summary += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
+
+        // 翻訳して日本語で返す（ラベルは日本語化済みだが、本体が英語の場合に備える）
+        try
+        {
+            var translated = await TranslateToJapanese(summary);
+            var finalText = string.IsNullOrWhiteSpace(translated) ? summary : translated;
+            return finalText.Trim();
+        }
+        catch
+        {
+            return summary.Trim();
+        }
+    }
+
+    private async Task<string> TranslateToJapanese(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return text;
+
+        try
+        {
+            var client = new AzureOpenAIClient(new Uri(endpoint), new DefaultAzureCredential());
+            var agent = client
+                .GetChatClient(deploymentName)
+                .CreateAIAgent(
+                    instructions: @"You are a professional Japanese translator specialized in technical evaluation reports.
+- Translate all content into natural, professional Japanese.
+- Keep ALL formatting: line breaks, indentation, bullets (•), section markers (▸, ◆), emoji, and decorative lines (━, ─).
+- Preserve technical terms appropriately (e.g., 'Coherence' → '一貫性', 'Fluency' → '流暢性', 'Relevance' → '関連性').
+- Keep color tags like {color:blue} intact.
+- Translate evaluation content while maintaining clarity and professionalism.
+- Output ONLY the translated text without any explanations.",
+                    name: "Translator");
+
+            var system = new ChatMessage(ChatRole.System, @"You translate technical evaluation reports into natural Japanese. 
+Preserve all formatting elements: emoji, bullets, lines, indentation, color tags. 
+Translate technical terms appropriately while keeping the report structure intact.");
+            var user = new ChatMessage(ChatRole.User, text);
+            var result = await agent.RunAsync([system, user]);
+            return result?.ToString() ?? text;
+        }
+        catch
+        {
+            return text;
+        }
+    }
+
+    private string GetMetricEmoji(string metricName)
+    {
+        if (string.IsNullOrEmpty(metricName)) return "📌";
+        
+        var name = metricName.ToLower();
+        return name switch
+        {
+            var n when n.Contains("coherence") || n.Contains("一貫") => "🔗",
+            var n when n.Contains("fluency") || n.Contains("流暢") => "✨",
+            var n when n.Contains("relevance") || n.Contains("関連") => "🎯",
+            var n when n.Contains("groundedness") || n.Contains("根拠") => "🏛️",
+            var n when n.Contains("similarity") || n.Contains("類似") => "🔄",
+            var n when n.Contains("correctness") || n.Contains("正確") => "✅",
+            _ => "📌"
+        };
+    }
+
+    private string GetMetricColorTag(string metricName)
+    {
+        if (string.IsNullOrEmpty(metricName)) return "{color:gray}";
+        
+        var name = metricName.ToLower();
+        var colorName = name switch
+        {
+            var n when n.Contains("coherence") || n.Contains("一貫") => "blue",
+            var n when n.Contains("fluency") || n.Contains("流暢") => "green",
+            var n when n.Contains("relevance") || n.Contains("関連") => "purple",
+            var n when n.Contains("groundedness") || n.Contains("根拠") => "orange",
+            var n when n.Contains("similarity") || n.Contains("類似") => "cyan",
+            var n when n.Contains("correctness") || n.Contains("正確") => "teal",
+            _ => "gray"
+        };
+        return $"{{color:{colorName}}}";
+    }
+
+    private string TryExtractScoreAndCreateBar(string interpretationText, out string displayText)
+    {
+        displayText = interpretationText;
+        
+        // スコアの抽出を試みる（例: "Score: 4", "4/5", "80%", "0.8" など）
+        var scorePatterns = new[]
+        {
+            @"(?:score|スコア)[:\s]*(\d+(?:\.\d+)?)\s*(?:/\s*(\d+))?",
+            @"(\d+)%",
+            @"^(\d+(?:\.\d+)?)\s*/\s*(\d+)$",
+            @"^0?\.(\d+)$"
+        };
+
+        foreach (var pattern in scorePatterns)
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(interpretationText, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                double score;
+                double maxScore = 5.0;
+
+                if (match.Groups.Count > 2 && !string.IsNullOrEmpty(match.Groups[2].Value))
+                {
+                    // "4/5" 形式
+                    score = double.Parse(match.Groups[1].Value);
+                    maxScore = double.Parse(match.Groups[2].Value);
+                }
+                else if (pattern.Contains("%"))
+                {
+                    // "80%" 形式
+                    score = double.Parse(match.Groups[1].Value);
+                    maxScore = 100.0;
+                }
+                else if (pattern.Contains("0?\\."))
+                {
+                    // "0.8" 形式
+                    score = double.Parse("0." + match.Groups[1].Value);
+                    maxScore = 1.0;
+                }
+                else
+                {
+                    score = double.Parse(match.Groups[1].Value);
+                }
+
+                // 正規化（0-1の範囲に）
+                var normalized = score / maxScore;
+                return CreateProgressBar(normalized, score, maxScore);
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private string CreateProgressBar(double normalizedScore, double score, double maxScore)
+    {
+        const int barLength = 20;
+        var filledLength = (int)(normalizedScore * barLength);
+        var emptyLength = barLength - filledLength;
+
+        var bar = new string('█', filledLength) + new string('░', emptyLength);
+        var percentage = (normalizedScore * 100).ToString("F1");
+        
+        return $"[{bar}] {percentage}% ({score}/{maxScore})";
+    }
+
+    private string ProcessColorTags(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        
+        // HTMLエスケープ
+        text = System.Net.WebUtility.HtmlEncode(text);
+        
+        // カラータグを処理
+        var colorMap = new Dictionary<string, string>
+        {
+            { "blue", "#2563eb" },
+            { "green", "#16a34a" },
+            { "purple", "#9333ea" },
+            { "orange", "#ea580c" },
+            { "cyan", "#0891b2" },
+            { "teal", "#0d9488" },
+            { "gray", "#6b7280" }
+        };
+        
+        foreach (var (colorName, colorCode) in colorMap)
+        {
+            text = text.Replace($"{{color:{colorName}}}", $"<span style='color:{colorCode};font-weight:600;'>");
+        }
+        text = text.Replace("{/color}", "</span>");
+        
+        // 改行をHTMLの改行に変換
+        text = text.Replace("\n", "<br/>");
+        
+        return text;
+    }
+
+    [JSInvokable]
+    public async Task SendMessageFromJS()
+    {
+        await SendMessage();
+    }
+
+    public void Dispose()
+    {
+        dotNetHelper?.Dispose();
+    }
+
+    private async Task ScrollToBottom()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("eval", "var el = document.getElementById('chat-container'); if(el) { el.scrollTop = el.scrollHeight; }");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error scrolling to bottom: {ex.Message}");
+        }
+    }
+
+    private class Message
+    {
+        public string User { get; set; } = string.Empty;
+        public string Text { get; set; } = string.Empty;
+    }
+}

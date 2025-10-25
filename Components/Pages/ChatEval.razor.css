@@ -1,0 +1,116 @@
+.chat-container {
+    background-color: #f5f7fb;
+    /* 落ち着いた淡色で読みやすく */
+    padding: 14px;
+    height: 70vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.chat-message {
+    display: flex;
+    margin-bottom: 12px;
+    max-width: 80%;
+}
+
+.chat-message.sent .message-content {
+    background-color: #e6f7e6;
+}
+
+.chat-message.received {
+    align-self: flex-start;
+}
+
+/* 役割ごとの配色とアクセント */
+.chat-message.received.assistant .message-content {
+    background-color: #ffffff;
+}
+
+.chat-message.received.evaluator .message-content {
+    background-color: #fffbeb;
+    border-left: 4px solid #f59e0b;
+    padding-left: 14px;
+    padding-right: 14px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+}
+
+.chat-message.received.system .message-content {
+    background-color: #ffecec;
+    border-left: 4px solid #ef4444;
+    padding-left: 10px;
+}
+
+.message-content {
+    background-color: #ffffff;
+    border-radius: 12px;
+    padding: 10px 12px;
+    position: relative;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    border: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+.chat-text {
+    word-wrap: break-word;
+    white-space: pre-wrap;
+    /* 改行とインデントを保持して読みやすく */
+}
+
+.chat-input {
+    display: flex;
+    padding: 10px;
+    background-color: #f0f0f0;
+    border-top: 1px solid #ddd;
+}
+
+.chat-input input {
+    flex-grow: 1;
+    border: 1px solid #ccc;
+    border-radius: 20px;
+    padding: 10px 15px;
+    margin-right: 10px;
+}
+
+/* 評価テキストは等幅で可読性を上げる */
+.chat-text.eval {
+    white-space: pre-wrap;
+    /* 改行とインデントを保持 */
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.92em;
+    line-height: 1.6;
+    color: #374151;
+    letter-spacing: 0.02em;
+}
+
+.chat-user {
+    font-weight: bold;
+    font-size: 0.8em;
+    margin-bottom: 5px;
+    color: #555;
+}
+
+/* 役割によってユーザー名の色合いを少し変える */
+.chat-message.received.evaluator .chat-user {
+    color: #b45309;
+}
+
+.chat-message.received.system .chat-user {
+    color: #b91c1c;
+}
+
+.chat-message.sent .chat-user {
+    color: #2563eb;
+}
+
+.chat-input button {
+    border: none;
+    background-color: #007bff;
+    color: white;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    cursor: pointer;
+    font-size: 1.2em;
+    line-height: 1;
+}

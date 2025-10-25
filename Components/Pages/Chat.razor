@@ -1,0 +1,193 @@
+@page "/chat"
+@rendermode InteractiveServer
+@inject IJSRuntime JSRuntime
+@implements IDisposable
+
+<PageTitle>Chat</PageTitle>
+
+<div id="chat-container" class="chat-container">
+    @foreach (var message in messages)
+    {
+        var messageClass = message.User == "You" ? "sent" : "received";
+        <div class="chat-message @messageClass">
+            <div class="message-content">
+                @if (message.User != "You")
+                {
+                    <div class="chat-user">@message.User</div>
+                }
+                <div class="chat-text">@message.Text</div>
+            </div>
+        </div>
+    }
+    @if (isProcessing)
+    {
+        <div class="chat-message received">
+            <div class="message-content">
+                <div class="chat-user">Assistant</div>
+                <div class="chat-text">入力中...</div>
+            </div>
+        </div>
+    }
+</div>
+
+<div class="chat-input">
+    <input @ref="inputElement"
+           @bind="newMessage" 
+           @bind:event="oninput" 
+           id="chat-input-field"
+           placeholder="メッセージを入力..." 
+           disabled="@isProcessing" />
+    <button @onclick="SendMessage" disabled="@isProcessing">Send</button>
+</div>
+
+<script>
+    window.setupChatInput = function(dotNetHelper) {
+        const inputElement = document.getElementById('chat-input-field');
+        if (!inputElement) return;
+        
+        let isComposing = false;
+        
+        inputElement.addEventListener('compositionstart', function() {
+            isComposing = true;
+        });
+        
+        inputElement.addEventListener('compositionend', function() {
+            isComposing = false;
+        });
+        
+        inputElement.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !isComposing) {
+                e.preventDefault();
+                dotNetHelper.invokeMethodAsync('SendMessageFromJS');
+            }
+        });
+    };
+</script>
+
+@code {
+    @using Azure.AI.OpenAI;
+    @using Azure.Identity;
+    @using Microsoft.Agents.AI;
+    @using Microsoft.Extensions.AI;
+    @using OpenAI;
+
+    private List<Message> messages = new List<Message>();
+    private string newMessage = string.Empty;
+    private bool isProcessing = false;
+    private ElementReference inputElement;
+    private DotNetObjectReference<Chat>? dotNetHelper;
+
+    private string endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT")
+        ?? throw new InvalidOperationException("Environment variable 'AZURE_OPENAI_ENDPOINT' is not set.");
+
+    private string deploymentName = Environment.GetEnvironmentVariable("AZURE_OPENAI_DEPLOYMENT_NAME")
+        ?? throw new InvalidOperationException("Environment variable 'AZURE_OPENAI_DEPLOYMENT_NAME' is not set.");
+
+    protected override void OnInitialized()
+    {
+        messages.Add(new Message { User = "Assistant", Text = "こんにちは！何かお手伝いできることはありますか？" });
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            dotNetHelper = DotNetObjectReference.Create(this);
+            await JSRuntime.InvokeVoidAsync("setupChatInput", dotNetHelper);
+            await ScrollToBottom();
+        }
+    }
+
+    private async Task SendMessage()
+    {
+        if (!string.IsNullOrWhiteSpace(newMessage) && !isProcessing)
+        {
+            var messageToSend = newMessage;
+            newMessage = string.Empty; // Clear the input field immediately
+
+            // Add user message
+            messages.Add(new Message { User = "You", Text = messageToSend });
+
+            // Set processing state and update UI
+            isProcessing = true;
+            StateHasChanged();
+
+            // Give the DOM a moment to update before scrolling
+            await Task.Delay(50);
+            await ScrollToBottom();
+
+            // Get AI response
+            try
+            {
+                var aiResponse = await GetAIResponse(messageToSend);
+                messages.Add(new Message { User = "Assistant", Text = aiResponse });
+            }
+            catch (Exception ex)
+            {
+                messages.Add(new Message { User = "System", Text = $"エラーが発生しました: {ex.Message}" });
+            }
+            finally
+            {
+                isProcessing = false;
+                StateHasChanged(); // Important: Update UI to re-enable input
+                await Task.Delay(50);
+                await ScrollToBottom();
+            }
+        }
+    }
+
+    private async Task<string> GetAIResponse(string userMessage)
+    {
+        try
+        {
+            AIAgent agent = new AzureOpenAIClient(
+                new Uri(endpoint),
+                new DefaultAzureCredential())
+                    .GetChatClient(deploymentName)
+                    .CreateAIAgent(instructions: "You are a helpful assistant. Always respond in Japanese.", name: "ChatAssistant");
+
+            ChatMessage systemMessage = new ChatMessage(
+                ChatRole.System,
+                "You are a helpful assistant. Always respond in Japanese.");
+            ChatMessage userChatMessage = new ChatMessage(ChatRole.User, userMessage);
+            
+            AgentRunResponse? result = await agent.RunAsync([systemMessage, userChatMessage]);
+
+            return result?.ToString() ?? "応答がありません";
+        }
+        catch (Exception ex)
+        {
+            return $"エラー: {ex.Message}";
+        }
+    }
+
+    [JSInvokable]
+    public async Task SendMessageFromJS()
+    {
+        await SendMessage();
+    }
+
+    public void Dispose()
+    {
+        dotNetHelper?.Dispose();
+    }
+
+    private async Task ScrollToBottom()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("eval", "var el = document.getElementById('chat-container'); if(el) { el.scrollTop = el.scrollHeight; }");
+        }
+        catch (Exception ex)
+        {
+            // Handle potential JS interop errors, e.g., if the element is not found
+            Console.WriteLine($"Error scrolling to bottom: {ex.Message}");
+        }
+    }
+
+    private class Message
+    {
+        public string User { get; set; } = string.Empty;
+        public string Text { get; set; } = string.Empty;
+    }
+}
