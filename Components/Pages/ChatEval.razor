@@ -134,7 +134,7 @@
                 try
                 {
                     var evalSummary = await EvaluateResponse(EvaluationSystemPrompt, messageToSend, aiResponse);
-                    messages.Add(new Message { User = "評価結果", Text = evalSummary });
+                    messages.Add(new Message { User = "evaluator", Text = evalSummary });
                 }
                 catch (Exception evalEx)
                 {
@@ -181,6 +181,9 @@
 
     private async Task<string> EvaluateResponse(string chatSystemMessage, string userMessage, string aiResponse)
     {
+        // 毎回新しい要約を作成
+        summary = string.Empty;
+
         IEvaluator[] evaluators = [
             new CoherenceEvaluator(),
             new FluencyEvaluator(),
