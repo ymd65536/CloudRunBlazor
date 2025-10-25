@@ -73,6 +73,8 @@
     @using Microsoft.Extensions.AI.Evaluation;
     @using Microsoft.Extensions.Configuration;
     @using Microsoft.Extensions.AI.Evaluation.Quality;
+    @using Microsoft.Extensions.AI.Evaluation.Reporting;
+    @using Microsoft.Extensions.AI.Evaluation.Reporting.Storage;
     @using OpenAI;
 
     private List<Message> messages = new List<Message>();
@@ -80,6 +82,7 @@
     private bool isProcessing = false;
     private ElementReference inputElement;
     private DotNetObjectReference<ChatEval>? dotNetHelper;
+    private const string EvaluationSystemPrompt = "You are a helpful assistant for evaluation. Always respond in Japanese.";
 
     private string endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT")
         ?? throw new InvalidOperationException("Environment variable 'AZURE_OPENAI_ENDPOINT' is not set.");
@@ -87,6 +90,7 @@
     private string deploymentName = Environment.GetEnvironmentVariable("AZURE_OPENAI_DEPLOYMENT_NAME")
         ?? throw new InvalidOperationException("Environment variable 'AZURE_OPENAI_DEPLOYMENT_NAME' is not set.");
 
+    private string summary = "";
     protected override void OnInitialized()
     {
         messages.Add(new Message { User = "Assistant", Text = "評価用チャットへようこそ。テキストを入力して送信してください。" });
@@ -125,6 +129,17 @@
             {
                 var aiResponse = await GetAIResponse(messageToSend);
                 messages.Add(new Message { User = "Assistant", Text = aiResponse });
+
+                // Evaluate the assistant response and show the result in Japanese
+                try
+                {
+                    var evalSummary = await EvaluateResponse(EvaluationSystemPrompt, messageToSend, aiResponse);
+                    messages.Add(new Message { User = "評価結果", Text = evalSummary });
+                }
+                catch (Exception evalEx)
+                {
+                    messages.Add(new Message { User = "System", Text = $"評価時にエラーが発生しました: {evalEx.Message}" });
+                }
             }
             catch (Exception ex)
             {
@@ -148,27 +163,129 @@
                 new Uri(endpoint),
                 new DefaultAzureCredential())
                     .GetChatClient(deploymentName)
-                    .CreateAIAgent(instructions: "You are a helpful assistant for evaluation. Always respond in Japanese.", name: "ChatEvalAssistant");
+                    .CreateAIAgent(instructions: EvaluationSystemPrompt, name: "ChatEvalAssistant");
 
             ChatMessage systemMessage = new ChatMessage(
                 ChatRole.System,
-                "You are a helpful assistant for evaluation. Always respond in Japanese.");
+                EvaluationSystemPrompt);
             ChatMessage userChatMessage = new ChatMessage(ChatRole.User, userMessage);
-            
             AgentRunResponse? result = await agent.RunAsync([systemMessage, userChatMessage]);
-
-            IEvaluator[] evaluators = [
-                new CoherenceEvaluator(),
-                new FluencyEvaluator(),
-                new RelevanceEvaluator(),
-            ];
-
 
             return result?.ToString() ?? "応答がありません";
         }
         catch (Exception ex)
         {
             return $"エラー: {ex.Message}";
+        }
+    }
+
+    private async Task<string> EvaluateResponse(string chatSystemMessage, string userMessage, string aiResponse)
+    {
+        IEvaluator[] evaluators = [
+            new CoherenceEvaluator(),
+            new FluencyEvaluator(),
+            new RelevanceEvaluator(),
+        ];
+
+        AzureOpenAIClient chatClient =
+            new(
+                new Uri(endpoint),
+                new DefaultAzureCredential(new DefaultAzureCredentialOptions()));
+
+        IChatClient client = chatClient.GetChatClient(deploymentName: deploymentName).AsIChatClient();
+
+        var chatConfig = new ChatConfiguration(client);
+
+        // ディスクにキャッシュを保存する ReportingConfiguration を作成
+        var reportingConfiguration = DiskBasedReportingConfiguration.Create(
+            // キャッシュを保存するルートパス
+            storageRootPath: "./reports",
+            // 評価器の設定
+            evaluators,
+            chatConfig
+            );
+
+        // ReportingConfiguration を使って ScenarioRun を作成 (ScenarioRun を使って実際の評価を行う）
+        ScenarioRun scenario = await reportingConfiguration.CreateScenarioRunAsync("QualityEvaluators");
+        // インプットに対して、結果がちゃんとしているかを評価
+        EvaluationResult evaluationResult = await scenario.EvaluateAsync(
+            // チャットのインプット
+            [
+                new ChatMessage(ChatRole.System, chatSystemMessage),
+                new ChatMessage(ChatRole.User, userMessage),
+            ],
+            // 結果
+            new ChatResponse(new ChatMessage(ChatRole.Assistant, aiResponse))
+        );
+        
+        foreach (var metric in evaluationResult.Metrics)
+        {
+            summary += $"\n【メトリックキー】 {metric.Key}";
+
+            // EvaluationMetric のプロパティを確認
+            if (metric.Value is EvaluationMetric evalMetric)
+            {
+                summary += $"\n  名称: {evalMetric.Name}";
+                summary += $"\n  理由: {evalMetric.Reason}";
+                summary += $"\n  解釈: {evalMetric.Interpretation}";
+                summary += $"\n  コンテキスト: {evalMetric.Context}";
+                
+                // Diagnostics の詳細を確認
+                if (evalMetric.Diagnostics != null)
+                {
+                    summary += $"\n  診断の数: {evalMetric.Diagnostics.Count}";
+                    foreach (var diagnostic in evalMetric.Diagnostics)
+                    {
+                        summary += $"\n    - メッセージ: {diagnostic.Message}";
+                        summary += $"\n      重要度: {diagnostic.Severity}";
+                    }
+                }
+                
+                // Metadata の確認
+                if (evalMetric.Metadata != null)
+                {
+                    summary += $"\n  メタデータの数: {evalMetric.Metadata.Count}";
+                    foreach (var meta in evalMetric.Metadata)
+                    {
+                        summary += $"\n    {meta.Key}: {meta.Value}";
+                    }
+                }
+            }
+        }
+
+        // 翻訳して日本語で返す（ラベルは日本語化済みだが、本体が英語の場合に備える）
+        try
+        {
+            var translated = await TranslateToJapanese(summary);
+            return string.IsNullOrWhiteSpace(translated) ? summary : translated;
+        }
+        catch
+        {
+            return summary;
+        }
+    }
+
+    private async Task<string> TranslateToJapanese(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return text;
+
+        try
+        {
+            var client = new AzureOpenAIClient(new Uri(endpoint), new DefaultAzureCredential());
+            var agent = client
+                .GetChatClient(deploymentName)
+                .CreateAIAgent(
+                    instructions: "You are a professional Japanese translator. Translate the user's content into natural Japanese. Preserve line breaks, indentation, and list markers. Output only the translation.",
+                    name: "Translator");
+
+            var system = new ChatMessage(ChatRole.System, "You translate any text into natural Japanese. Keep formatting.");
+            var user = new ChatMessage(ChatRole.User, text);
+            var result = await agent.RunAsync([system, user]);
+            return result?.ToString() ?? text;
+        }
+        catch
+        {
+            return text;
         }
     }
 

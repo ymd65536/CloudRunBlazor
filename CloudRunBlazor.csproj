@@ -12,6 +12,7 @@
     <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.0.0-preview.251009.1" />
     <PackageReference Include="Microsoft.Extensions.AI.Evaluation" Version="9.10.0" />
     <PackageReference Include="Microsoft.Extensions.AI.Evaluation.Quality" Version="9.10.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.Evaluation.Reporting" Version="9.10.0" />
   </ItemGroup>
 
 </Project>
