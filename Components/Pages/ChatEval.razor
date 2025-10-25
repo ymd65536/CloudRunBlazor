@@ -24,8 +24,8 @@
     {
         <div class="chat-message received">
             <div class="message-content">
-                <div class="chat-user">Assistant</div>
-                <div class="chat-text">入力中...</div>
+                <div class="chat-user">@(!isEvaluating ? "Assistant" : "evaluator")</div>
+                <div class="chat-text">@(!isEvaluating ? "入力中..." : "評価中...")</div>
             </div>
         </div>
     }
@@ -80,6 +80,7 @@
     private List<Message> messages = new List<Message>();
     private string newMessage = string.Empty;
     private bool isProcessing = false;
+    private bool isEvaluating = false;
     private ElementReference inputElement;
     private DotNetObjectReference<ChatEval>? dotNetHelper;
     private const string EvaluationSystemPrompt = "You are a helpful assistant for evaluation. Always respond in Japanese.";
@@ -130,9 +131,16 @@
                 var aiResponse = await GetAIResponse(messageToSend);
                 messages.Add(new Message { User = "Assistant", Text = aiResponse });
 
+                // Assistant 応答を一旦表示してスクロール
+                StateHasChanged();
+                await Task.Delay(50);
+                await ScrollToBottom();
+
                 // Evaluate the assistant response and show the result in Japanese
                 try
                 {
+                    isEvaluating = true;
+                    StateHasChanged();
                     var evalSummary = await EvaluateResponse(EvaluationSystemPrompt, messageToSend, aiResponse);
                     messages.Add(new Message { User = "evaluator", Text = evalSummary });
                 }
@@ -147,6 +155,7 @@
             }
             finally
             {
+                isEvaluating = false;
                 isProcessing = false;
                 StateHasChanged(); // Important: Update UI to re-enable input
                 await Task.Delay(50);

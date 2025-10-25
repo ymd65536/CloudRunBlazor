@@ -18,7 +18,7 @@
     border-radius: 10px;
     padding: 10px;
     position: relative;
-    box-shadow: 0 1px 1px rgba(0,0,0,0.1);
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.1);
 }
 
 .chat-message.sent {
@@ -42,6 +42,8 @@
 
 .chat-text {
     word-wrap: break-word;
+    white-space: pre-wrap;
+    /* 改行とインデントを保持して読みやすく */
 }
 
 .chat-input {
