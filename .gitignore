@@ -2,3 +2,4 @@ bin
 obj
 .env
 reports
+.DS_Store
